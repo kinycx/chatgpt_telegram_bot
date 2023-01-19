@@ -5,20 +5,31 @@ import html
 import json
 from datetime import datetime
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    CallbackContext,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters
-)
-from telegram.constants import ParseMode, ChatAction
+import logging
+import pyrogram
+from pyrogram import Client, MessageHandler, CallbackQueryHandler, filters
+from utils import chat
+from constants import api_id, api_hash, bot_token
+
 
 import config
 import database
 import chatgpt
+
+# Enable logging
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    level=logging.INFO)
+
+logger = logging.getLogger(__name__)
+
+# Create the bot client
+app = Client('chat-gpt-bot', api_id=api_id,
+             api_hash=api_hash, bot_token=bot_token)
+
+# Define a function to handle the /start command
+
+
+
 
 
 # setup
@@ -34,17 +45,16 @@ HELP_MESSAGE = """Commands:
 """
 
 
-async def start_handle(update: Update, context: CallbackContext):
-    user = update.message.from_user
-    user_id = user.id
+def start_handle(client, message):
+    user_id = message.from_user.id
 
-    if not db.check_if_user_exists(user.id):
+    if not db.check_if_user_exists(user_id):
         db.add_new_user(
             user_id,
-            update.message.chat_id,
-            username=user.username,
-            first_name=user.first_name,
-            last_name= user.last_name
+            message.chat.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name= message.from_user.last_name
         )
     
     db.set_user_attribute(user_id, "last_interaction", datetime.now())
@@ -55,7 +65,8 @@ async def start_handle(update: Update, context: CallbackContext):
 
     reply_text += "\nAnd now... ask me anything!"
     
-    await update.message.reply_text(reply_text, parse_mode=ParseMode.HTML)
+    message.reply(reply_text, parse_mode="html")
+
 
 
 async def help_handle(update: Update, context: CallbackContext):
@@ -76,10 +87,10 @@ async def retry_handle(update: Update, context: CallbackContext):
     last_dialog_message = dialog_messages.pop()
     db.set_dialog_messages(user_id, dialog_messages, dialog_id=None)  # last message was removed from the context
 
-    await message_handle(update, context, message=last_dialog_message["user"], use_new_dialog_timeout=False)
+    await message_handle(update, context, msg=last_dialog_message["user"], use_new_dialog_timeout=False)
 
 
-async def message_handle(update: Update, context: CallbackContext, message=None, use_new_dialog_timeout=True):
+async def message_handle(update: Update, context: CallbackContext, msg=None, use_new_dialog_timeout=True):
     user_id = update.message.from_user.id
 
     # new dialog timeout
@@ -93,16 +104,16 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
     await update.message.chat.send_action(action="typing")
 
     try:
-        message = message or update.message.text
+        msg = msg or update.message.text
 
         answer, prompt, n_used_tokens, n_first_dialog_messages_removed = chatgpt.ChatGPT().send_message(
-            message,
+            msg,
             dialog_messages=db.get_dialog_messages(user_id, dialog_id=None),
             chat_mode=db.get_user_attribute(user_id, "current_chat_mode"),
         )
 
         # update user data
-        new_dialog_message = {"user": message, "bot": answer, "date": datetime.now()}
+        new_dialog_message = {"user": msg, "bot": answer, "date": datetime.now()}
         db.set_dialog_messages(
             user_id,
             db.get_dialog_messages(user_id, dialog_id=None) + [new_dialog_message],
